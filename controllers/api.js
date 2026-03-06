@@ -30,7 +30,7 @@ exports.getApi = (req, res) => {
  * GET /api/foursquare
  * Foursquare API example.
  */
-exports.getFoursquare = async (req, res, next) => {
+exports.getFoursquare = async (req, res) => {
   try {
     const options = {
       method: 'GET',
