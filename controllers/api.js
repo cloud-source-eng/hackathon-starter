@@ -41,12 +41,12 @@ exports.getFoursquare = async (req, res) => {
     };
 
     const fetchJson = async (url, fetchOptions, label) => {
-      const res = await fetch(url, fetchOptions);
-      if (!res.ok) {
-        const text = await res.text().catch(() => '<unable to read body>');
-        throw new Error(`${label} failed: ${res.status} ${res.statusText} - ${text}`);
+      const response = await fetch(url, fetchOptions);
+      if (!response.ok) {
+        const text = await response.text().catch(() => '<unable to read body>');
+        throw new Error(`${label} failed: ${response.status} ${response.statusText} - ${text}`);
       }
-      return res.json();
+      return response.json();
     };
 
     const [trendingVenuesRes, venueDetailRes] = await Promise.all([
