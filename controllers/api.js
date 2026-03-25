@@ -30,7 +30,7 @@ exports.getApi = (req, res) => {
  * GET /api/foursquare
  * Foursquare API example.
  */
-exports.getFoursquare = async (req, res, next) => {
+exports.getFoursquare = async (req, res) => {
   try {
     const options = {
       method: 'GET',
@@ -1005,23 +1005,17 @@ exports.getPayPalSuccess = async (req, res) => {
       },
     });
     if (!response.ok) {
-      throw new Error('Failed to capture PayPal payment');
+      throw new Error('Failed to capture PayPal order');
     }
-
-    await response.json(); // Ensure the response is consumed
-
     res.render('api/paypal', {
-      result: true,
-      success: true,
-      purchaseInfo,
+      result: 'success',
+      title: 'Paypal API',
     });
   } catch (err) {
     console.error(err);
     res.render('api/paypal', {
-      title: 'Paypal API - Success',
-      result: true,
-      success: false,
-      purchaseInfo,
+      result: 'error',
+      title: 'Paypal API',
     });
   }
 };
@@ -1031,12 +1025,9 @@ exports.getPayPalSuccess = async (req, res) => {
  * PayPal API example without SDK.
  */
 exports.getPayPalCancel = (req, res) => {
-  req.session.orderId = null;
   res.render('api/paypal', {
-    title: 'Paypal API - Cancel',
-    result: true,
-    canceled: true,
-    purchaseInfo,
+    result: 'cancel',
+    title: 'Paypal API',
   });
 };
 
@@ -1045,74 +1036,57 @@ exports.getPayPalCancel = (req, res) => {
  * Lob API example.
  */
 exports.getLob = async (req, res, next) => {
-  const config = new LobConfiguration({
-    username: process.env.LOB_KEY,
+  const lobConfig = new LobConfiguration({
+    username: process.env.LOB_API_KEY,
   });
-
-  let recipientName;
-  if (req.user) {
-    recipientName = req.user.profile.name;
-  } else {
-    recipientName = 'John Doe';
-  }
-  const addressTo = {
-    name: recipientName || 'Developer',
-    address_line1: '123 Main Street',
-    address_city: 'New York',
-    address_state: 'NY',
-    address_zip: '94107',
-  };
-  const addressFrom = {
-    name: 'Hackathon Starter',
-    address_line1: '305 Harrison St',
-    address_city: 'Seattle',
-    address_state: 'WA',
-    address_zip: '98109',
-    address_country: 'US',
-  };
-
-  const zipData = new ZipEditable({
-    zip_code: addressTo.address_zip,
+  const zipLookupsApi = new ZipLookupsApi(lobConfig);
+  const zipEditable = new ZipEditable({
+    zip_code: '94107',
   });
-
-  const letterData = new LetterEditable({
-    use_type: 'operational',
-    to: addressTo,
-    from: addressFrom,
-    // file: minified version of https://github.com/lob/lob-node/blob/master/examples/html/letter.html with slight changes as an example
-    file: `<html><head><meta charset="UTF-8"><style>body{width:8.5in;height:11in;margin:0;padding:0}.page{page-break-after:always;position:relative;width:8.5in;height:11in}.page-content{position:absolute;width:8.125in;height:10.625in;left:1in;top:1in}.text{position:relative;left:20px;top:3in;width:6in;font-size:14px}</style></head>
-          <body><div class="page"><div class="page-content"><div class="text">
-          Hello ${addressTo.name}, <p> We would like to welcome you to the community! Thanks for being a part of the team! <p><p> Cheer,<br>${addressFrom.name}
-          </div></div></div></body></html>`,
-    color: false,
-  });
-
   try {
-    const lettersApi = new LettersApi(config);
-    const zipDetails = await new ZipLookupsApi(config).lookup(zipData);
-    const uspsLetter = await lettersApi.create(letterData);
-    await new Promise((resolve) => setTimeout(resolve, 3100)); // wait for the PDF letter to be generated
-
-    // Sometimes Lob's letter URL is invalid, takes longer and we need to retry
-    let attempts = 0;
-    while (attempts < 3) {
-      const urlToCheck = uspsLetter.url || uspsLetter._url;
-      const res = await fetch(urlToCheck, { method: 'GET' });
-      if (res.ok) break; // URL is reachable
-      console.log(`Lob letter URL not valid, requesting again ... (${attempts + 1}/3)`);
-      attempts += 1;
-      await new Promise((resolve) => setTimeout(resolve, 5000)); //wait for 5 seconds before retry
-      const fresh = await lettersApi.get(uspsLetter.id);
-      Object.assign(uspsLetter, fresh);
-    }
-
+    const { data: zipDetails } = await zipLookupsApi.lookup(zipEditable);
     res.render('api/lob', {
       title: 'Lob API',
       zipDetails,
-      uspsLetter,
     });
-  } catch (error) {
-    next(error);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/lob
+ * Lob API example.
+ */
+exports.postLob = async (req, res, next) => {
+  const lobConfig = new LobConfiguration({
+    username: process.env.LOB_API_KEY,
+  });
+  const lettersApi = new LettersApi(lobConfig);
+  const letterEditable = new LetterEditable({
+    to: {
+      name: 'Harry Zhang',
+      address_line1: '210 King St',
+      address_city: 'San Francisco',
+      address_state: 'CA',
+      address_zip: '94107',
+    },
+    from: {
+      name: 'Harry Zhang',
+      address_line1: '210 King St',
+      address_city: 'San Francisco',
+      address_state: 'CA',
+      address_zip: '94107',
+    },
+    file: 'https://s3-us-west-2.amazonaws.com/lob-assets/letter_template.pdf',
+    color: true,
+  });
+  try {
+    const { data: letter } = await lettersApi.create(letterEditable);
+    req.flash('success', { msg: `Letter sent successfully to ${letter.to.name}` });
+    res.redirect('/api/lob');
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -1120,7 +1094,6 @@ exports.getLob = async (req, res, next) => {
  * GET /api/upload
  * File Upload API example.
  */
-
 exports.getFileUpload = (req, res) => {
   res.render('api/upload', {
     title: 'File Upload',
@@ -1128,572 +1101,102 @@ exports.getFileUpload = (req, res) => {
 };
 
 exports.postFileUpload = (req, res) => {
-  if (!req.file && req.multerError) {
-    if (req.multerError.code === 'LIMIT_FILE_SIZE') {
-      req.flash('errors', {
-        msg: 'File size is too large. Maximum file size allowed is 1MB',
-      });
-      // Save the session to ensure flash is persisted before redirect to
-      // avoid race conditions with async session stores
-      return req.session.save(() => res.redirect('/api/upload'));
-    }
-    req.flash('errors', { msg: req.multerError.message });
-    // Save the session to ensure flash is persisted before redirect
-    return req.session.save(() => res.redirect('/api/upload'));
-  }
-
   req.flash('success', { msg: 'File was uploaded successfully.' });
-  // Save the session to ensure flash is persisted before redirect
-  return req.session.save(() => res.redirect('/api/upload'));
+  res.redirect('/api/upload');
 };
 
-exports.uploadMiddleware = (req, res, next) => {
-  // configure Multer with a 1 MB limit
-  const upload = multer({
-    dest: path.join(__dirname, '../uploads'),
-    limits: { fileSize: 1024 * 1024 * 1 },
-  });
-  upload.single('myFile')(req, res, (err) => {
-    if (err) {
-      req.multerError = err;
-    }
-    next();
-  });
-};
-
-exports.getHereMaps = (req, res) => {
-  res.render('api/here-maps', {
-    apikey: process.env.HERE_API_KEY,
-    title: 'Here Maps API',
-  });
-};
-
-exports.getGoogleMaps = (req, res) => {
-  res.render('api/google-maps', {
-    title: 'Google Maps API',
-    google_map_api_key: process.env.GOOGLE_MAP_API_KEY,
-  });
-};
-
-exports.getGoogleDrive = (req, res) => {
-  const token = req.user.tokens.find((token) => token.kind === 'google');
-  const authObj = new googledrive.auth.OAuth2({
-    access_type: 'offline',
-  });
-  authObj.setCredentials({
-    access_token: token.accessToken,
-  });
-  const drive = googledrive.drive({
-    version: 'v3',
-    auth: authObj,
-  });
-
-  const errorMsgPermission = 'Missing Google Drive access permission. Please unlink and relink your Google account with sufficient permissions under your account settings.';
-  const errorMsgGeneric = 'There was an error while fetching Google Drive data.';
-  drive.files.list({ fields: 'files(iconLink, webViewLink, name)' }, (err, response) => {
-    if (err) {
-      console.error('Google Drive API Error:', err);
-      const msg = err.message === 'Insufficient Permission' ? errorMsgPermission : errorMsgGeneric;
-      req.flash('errors', { msg });
-      return res.redirect('/api');
-    }
-    res.render('api/google-drive', {
-      title: 'Google Drive API',
-      files: response.data.files,
-    });
-  });
-};
-
-exports.getGoogleSheets = (req, res) => {
-  const token = req.user.tokens.find((token) => token.kind === 'google');
-  const authObj = new googlesheets.auth.OAuth2({
-    access_type: 'offline',
-  });
-  authObj.setCredentials({
-    access_token: token.accessToken,
-  });
-
-  const sheets = googlesheets.sheets({
-    version: 'v4',
-    auth: authObj,
-  });
-
-  const url = 'https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit#gid=0';
-  const re = /spreadsheets\/d\/([a-zA-Z0-9-_]+)/;
-  const id = url.match(re)[1];
-
-  const errorMsgPermission = 'Missing Google sheets access permission. Please unlink and relink your Google account with sufficient permissions under your account settings.';
-  const errorMsgGeneric = 'There was an error while fetching Google Sheets data.';
-  sheets.spreadsheets.values.get({ spreadsheetId: id, range: 'Class Data!A1:F' }, (err, response) => {
-    if (err) {
-      console.error('Google Sheets API Error:', err);
-      const msg = err.message === 'Insufficient Permission' ? errorMsgPermission : errorMsgGeneric;
-      req.flash('errors', { msg });
-      return res.redirect('/api');
-    }
-    res.render('api/google-sheets', {
-      title: 'Google Sheets API',
-      values: response.data.values,
-    });
+/**
+ * GET /api/pinterest
+ * Pinterest API example.
+ */
+exports.getPinterest = (req, res) => {
+  res.render('api/pinterest', {
+    title: 'Pinterest API',
   });
 };
 
 /**
- * Trakt.tv API Helpers
+ * POST /api/pinterest
+ * Create a Pinterest board.
  */
-const formatDate = (isoString) => {
-  if (!isoString) return '';
-  const date = new Date(isoString);
-  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-};
-
-/* Trakt does not permit hotlinking of images, so we need to get the image
- * from them and serve it ourselves. Use an edge CDN/caching service like Cloudflare
- * or Fastly in front of your server to cache the images in production.
- * This is a simple implementation of an image cache from Trakt as a trusted source:
- * - Uses a simple in-memory cache, with a limit on the number of images stored
- * - Uses a static path for the image cache, which is sufficient for this use case
- * - Uses a helper function to convert a Trakt image URL to a filename
- * - Uses a helper function to fetch and cache an image, returning the static path for <img src="">
- */
-
-/*
- * Helper function and variables for file name generation and tracking of cached images
- */
-const traktImageCache = [];
-const TRAKT_IMAGE_CACHE_LIMIT = 20;
-function traktUrlToFilename(url) {
-  if (!url) return null;
-  const a = url.replace(/^https?:\/\//, '').replace(/\//g, '-');
-  return a;
-}
-
-/*
- * Helper function to fetch and cache Trakt image
- * Fetch and cache Trakt image, return the static path for <img src="">
- */
-async function fetchAndCacheTraktImage(imageUrl) {
-  const imageCacheDir = path.join(__dirname, '..', 'tmp', 'image-cache');
-  if (!imageUrl) return null;
-  const filename = traktUrlToFilename(imageUrl);
-  if (!filename) return null;
-
-  // Check if already cached
-  const found = traktImageCache.find((entry) => entry.url === imageUrl);
-  if (found) {
-    return `${process.env.BASE_URL}/image-cache/${found.filename}`;
-  }
-
-  if (!fs.existsSync(imageCacheDir)) {
-    fs.mkdirSync(imageCacheDir, { recursive: true }); // Ensures that parent directories are created
-  }
-
-  // Download and save
-  try {
-    const response = await fetch(imageUrl);
-    if (!response.ok) return null;
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const absPath = path.join(imageCacheDir, filename);
-    try {
-      fs.writeFileSync(absPath, buffer);
-    } catch (writeErr) {
-      console.error('Failed to write image to disk:', absPath, writeErr);
-      return null;
-    }
-
-    // Add to cache, delete the oldest file if we have hit our cache limit
-    traktImageCache.push({ url: imageUrl, filename });
-    while (traktImageCache.length > TRAKT_IMAGE_CACHE_LIMIT) {
-      const removed = traktImageCache.shift();
-      const oldPath = `${imageCacheDir}/${removed.filename}`;
-      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-    }
-
-    return `${process.env.BASE_URL}/image-cache/${filename}`;
-  } catch (err) {
-    console.log('Trakt image cache error:', err);
-    return null;
-  }
-}
-
-async function fetchTraktUserProfile(traktToken) {
-  const res = await fetch('https://api.trakt.tv/users/me?extended=full', {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${traktToken}`,
-      'trakt-api-version': 2,
-      'trakt-api-key': process.env.TRAKT_ID,
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-  return res.json();
-}
-
-async function fetchTraktUserHistory(traktToken, limit) {
-  const res = await fetch(`https://api.trakt.tv/users/me/history?limit=${limit}`, {
-    headers: {
-      Authorization: `Bearer ${traktToken}`,
-      'trakt-api-version': 2,
-      'trakt-api-key': process.env.TRAKT_ID,
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!res.ok) return [];
-  return res.json();
-}
-
-async function fetchTraktTrendingMovies(limit) {
-  const res = await fetch(`https://api.trakt.tv/movies/trending?limit=${limit}&extended=images`, {
-    headers: {
-      'trakt-api-version': 2,
-      'trakt-api-key': process.env.TRAKT_ID,
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!res.ok) return [];
-  const trending = await res.json();
-  return Promise.all(
-    trending.map(async (item) => {
-      let imgUrl = null;
-      if (item.movie && item.movie.images) {
-        if (item.movie.images.fanart && Array.isArray(item.movie.images.fanart) && item.movie.images.fanart.length > 0) {
-          imgUrl = `https://${item.movie.images.fanart[0].replace(/^https?:\/\//, '')}`;
-        } else if (item.movie.images.poster && Array.isArray(item.movie.images.poster) && item.movie.images.poster.length > 0) {
-          imgUrl = `https://${item.movie.images.poster[0].replace(/^https?:\/\//, '')}`;
-        }
-      }
-      item.movie.largeImageUrl = await fetchAndCacheTraktImage(imgUrl);
-      return item;
-    }),
-  );
-}
-
-async function fetchMovieDetails(slug, watchers) {
-  const res = await fetch(`https://api.trakt.tv/movies/${slug}?extended=full,images`, {
-    headers: {
-      'trakt-api-version': 2,
-      'trakt-api-key': process.env.TRAKT_ID,
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!res.ok) return null;
-  const movie = await res.json();
-  let imgUrl = null;
-  if (movie.images) {
-    if (movie.images.fanart && Array.isArray(movie.images.fanart) && movie.images.fanart.length > 0) {
-      imgUrl = `https://${movie.images.fanart[0].replace(/^https?:\/\//, '')}`;
-    } else if (movie.images.poster && Array.isArray(movie.images.poster) && movie.images.poster.length > 0) {
-      imgUrl = `https://${movie.images.poster[0].replace(/^https?:\/\//, '')}`;
-    }
-  }
-  movie.largeImageUrl = await fetchAndCacheTraktImage(imgUrl);
-  if (typeof movie.rating === 'number') {
-    movie.ratingFormatted = `${movie.rating.toFixed(2)} / 10`;
-  } else {
-    movie.ratingFormatted = '';
-  }
-  movie.languages = movie.languages || [];
-  movie.genres = movie.genres || [];
-  movie.certification = movie.certification || '';
-  movie.watchers = watchers;
-  // Trailer (YouTube embed)
-  movie.trailerEmbed = null;
-  if (movie.trailer && (movie.trailer.startsWith('https://youtube.com/') || movie.trailer.startsWith('http://youtu.be/'))) {
-    const match = movie.trailer.match(/v=([a-zA-Z0-9_-]+)/) || movie.trailer.match(/youtu\.be\/([a-zA-Z0-9_-]+)/);
-    if (match && match[1]) {
-      movie.trailerEmbed = `https://www.youtube.com/embed/${match[1]}`;
-    }
-  }
-  return movie;
-}
-
-/*
- * GET /api/trakt
- * Trakt.tv API Example.
- * - Always show public trending movies, even if not logged in.
- * - Show user profile/history only if user is logged in AND has linked Trakt.
- */
-exports.getTrakt = async (req, res, next) => {
-  const limit = 10;
-  let authFailure = null;
-  let userInfo = null;
-  let userHistory = [];
-  let trending = [];
-  let trendingTop = null;
-
-  // Determine Trakt token if user is logged in and has linked Trakt
-  let traktToken = null;
-  if (req.user && req.user.tokens) {
-    const tokenObj = req.user.tokens.find((token) => token.kind === 'trakt');
-    if (tokenObj) {
-      traktToken = tokenObj.accessToken;
-    }
-  }
-
-  // Only fetch user info/history if logged in and linked Trakt
-  if (req.user) {
-    if (!traktToken) {
-      authFailure = 'NotTraktAuthorized';
-    }
-  } else {
-    authFailure = 'NotLoggedIn';
-  }
-
-  try {
-    if (traktToken) {
-      userInfo = await fetchTraktUserProfile(traktToken);
-      userHistory = await fetchTraktUserHistory(traktToken, limit);
-    }
-    trending = await fetchTraktTrendingMovies(6);
-    if (trending.length > 0) {
-      const top = trending[0];
-      const slug = top.movie && top.movie.ids && top.movie.ids.slug;
-      if (slug) {
-        trendingTop = await fetchMovieDetails(slug, top.watchers);
-      }
-    }
-  } catch (error) {
-    console.log('Trakt API Error:', error);
-    trending = [];
-    trendingTop = null;
-  }
-
-  try {
-    res.render('api/trakt', {
-      title: 'Trakt.tv API',
-      userInfo,
-      userHistory,
-      limit,
-      authFailure,
-      formatDate,
-      trending,
-      trendingTop,
-      trendingTopTrailer: trendingTop && trendingTop.trailerEmbed,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * GET /api/pubchem
- * PubChem API example - Chemical information for Aspirin.
- */
-exports.getPubChem = async (req, res, next) => {
-  try {
-    // Aspirin CID (Compound ID) in PubChem
-    const aspirinCID = 2244;
-
-    // Fetch comprehensive data about Aspirin from PubChem
-    const [compoundData, propertiesData, synonymsData, classificationData, safetyData, manufacturingData, imageData] = await Promise.all([
-      // Basic compound information
-      fetch(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${aspirinCID}/JSON`)
-        .then((res) => res.json())
-        .catch((err) => {
-          console.error('Basic compound information API error:', err);
-          return { error: 'Failed to Basic compound information' };
-        }),
-
-      // Chemical and physical properties
-      fetch(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${aspirinCID}/property/MolecularFormula,MolecularWeight,ExactMass,TPSA,Complexity,Charge,HBondDonorCount,HBondAcceptorCount,RotatableBondCount,HeavyAtomCount,XLogP/JSON`)
-        .then((res) => res.json())
-        .catch((err) => {
-          console.error('Chemical and physical properties API error:', err);
-          return { error: 'Failed to fetch Chemical and Physical properties' };
-        }),
-
-      // Synonyms and alternative names
-      fetch(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${aspirinCID}/synonyms/JSON`)
-        .then((res) => res.json())
-        .catch((err) => {
-          console.error('Synonyms and Alternative Names API error:', err);
-          return { error: 'Failed to fetch Synonyms and Alternative names' };
-        }),
-
-      // Classification data
-      fetch(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${aspirinCID}/classification/JSON`)
-        .then((res) => res.json())
-        .catch((err) => {
-          console.error('Classification API error:', err);
-          return { error: 'Failed to fetch Classification Data' };
-        }),
-
-      // Safety and hazard information
-      fetch(`https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/${aspirinCID}/JSON?heading=Safety%20and%20Hazards`)
-        .then((res) => res.json())
-        .catch((err) => {
-          console.error('Safety and hazard information API error:', err);
-          return { error: 'Failed to fetch Safety and Hazard information' };
-        }),
-
-      // Manufacturing and use information
-      fetch(`https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/${aspirinCID}/JSON?heading=Use%20and%20Manufacturing`)
-        .then((res) => res.json())
-        .catch((err) => {
-          console.error('Manufacturing and use information API error:', err);
-          return { error: 'Failed to fetch Manufacturing and use information' };
-        }),
-
-      // 2D Structure image URL
-      `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${aspirinCID}/PNG?image_size=large`,
-    ]);
-
-    // Process and structure the data
-    const compound = compoundData?.PC_Compounds?.[0] || {};
-    const properties = propertiesData?.PropertyTable?.Properties?.[0] || {};
-
-    // Handle synonyms from API data
-    const synonyms = synonymsData?.InformationList?.Information?.[0]?.Synonym || [];
-
-    const classifications = classificationData?.Hierarchies || [];
-
-    // Extract safety information
-    const safetyInfo = {};
-    if (safetyData?.Record?.Section) {
-      const safetySection = safetyData.Record.Section.find((s) => s.TOCHeading === 'Safety and Hazards');
-      if (safetySection?.Section) {
-        safetySection.Section.forEach((section) => {
-          if (section.TOCHeading && section.Information) {
-            safetyInfo[section.TOCHeading] = section.Information.map((info) => info.Value?.StringWithMarkup?.[0]?.String || info.Value?.String || '').filter(Boolean);
-          }
-        });
-      }
-    }
-
-    // Extract manufacturing information
-    const manufacturingInfo =
-      manufacturingData?.Record?.Section?.find((s) => /use.*manufacturing/i.test(s.TOCHeading))?.Section?.find((sub) => /methods.*manufacturing/i.test(sub.TOCHeading))?.Information?.[0]?.Value?.StringWithMarkup?.[0]?.String ||
-      manufacturingData?.Record?.Section?.find((s) => /use.*manufacturing/i.test(s.TOCHeading))?.Section?.find((sub) => /methods.*manufacturing/i.test(sub.TOCHeading))?.Information?.[0]?.Value?.String ||
-      null;
-
-    res.render('api/pubchem', {
-      title: 'PubChem API - Chemical Information',
-      compound,
-      properties,
-      synonyms: synonyms.slice(0, 10), // Limit to first 10 synonyms
-      classifications,
-      safetyInfo,
-      manufacturingInfo,
-      imageUrl: imageData,
-      aspirinCID,
-    });
-  } catch (error) {
-    console.error('PubChem API Error:', error);
-    next(error);
-  }
-};
-
-/*
- * GET /api/wikipedia
- * wikipedia.org API Example.
- * - Uses wikipedia'a API to extract text, images, data and display in the api/wikipedia page
- * - Allow users to search content and dispay its data etracted from wikipedia page
- */
-exports.getWikipedia = async (req, res) => {
+exports.postPinterest = async (req, res, next) => {
   const validationErrors = [];
-  const query = validator.trim(req.query.q || '');
-
-  // enforce max length
-  if (query.length && !validator.isLength(query, { max: 200 })) {
-    validationErrors.push({ msg: 'Search term must be less than 200 characters.' });
-  }
-
-  const allowedPunctuation = " \\-_,.()'"; // allow space and punctuation
-  if (query.length && !validator.isAlphanumeric(query, 'en-US', { ignore: allowedPunctuation })) {
-    validationErrors.push({ msg: 'Search term contains invalid characters.' });
-  }
+  if (validator.isEmpty(req.body.name)) validationErrors.push({ msg: 'Board name cannot be blank.' });
+  if (validator.isEmpty(req.body.description)) validationErrors.push({ msg: 'Board description cannot be blank.' });
 
   if (validationErrors.length) {
     req.flash('errors', validationErrors);
-    return res.redirect('/api/wikipedia');
+    return res.redirect('/api/pinterest');
   }
 
-  let error = null;
-
-  //function to search wikipedia for the term or word
-  const searchWikipedia = async (term) => {
-    const url = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&list=search&srsearch=${encodeURIComponent(term)}&srlimit=10`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('Failed to search Wikipedia');
-    const data = await response.json();
-    if (data.query && data.query.search) {
-      return data.query.search.map((result) => ({
-        title: result.title,
-        snippet: result.snippet.replace(/<\/?[^>]+(>|$)/g, ''), //regex to remove html tags,
-      }));
-    }
-    return [];
-  };
-
-  //function to get page sections of the title or term page
-  const getPageSections = async (title) => {
-    const url = `https://en.wikipedia.org/w/api.php?action=parse&format=json&origin=*&page=${encodeURIComponent(title)}&prop=sections`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('Failed to fetch sections');
-    const data = await response.json();
-    if (data.parse && data.parse.sections) {
-      return data.parse.sections.map((s) => s.line);
-    }
-    return [];
-  };
-
-  //function to get title's page 1st paragraph text i.e., <1000 words
-  const getPageExtract = async (title) => {
-    const url = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&prop=extracts&explaintext=1&titles=${encodeURIComponent(title)}&exintro=1`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('Failed to fetch extract');
-    const data = await response.json();
-    const pageObj = data.query && data.query.pages ? Object.values(data.query.pages)[0] : null;
-    if (pageObj && pageObj.extract) {
-      return pageObj.extract.length > 1000 ? `${pageObj.extract.slice(0, 1000)}...` : pageObj.extract;
-    }
-    return '';
-  };
-
-  //function to get image based on title page of wikipedia if available
-  const getPageImage = async (title) => {
-    const url = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&prop=pageimages|pageterms&titles=${encodeURIComponent(title)}&pithumbsize=400`;
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error('Failed to fetch image');
-    const data = await resp.json();
-    const pageObj = data.query && data.query.pages ? Object.values(data.query.pages)[0] : null;
-    if (pageObj) {
-      if (pageObj.thumbnail && pageObj.thumbnail.source) return pageObj.thumbnail.source;
-      if (pageObj.original && pageObj.original.source) return pageObj.original.source;
-    }
-    return null;
-  };
-
-  // Node.js content example variables
-  const pageTitle = 'Node.js';
-  const wikiLink = `https://en.wikipedia.org/wiki/${encodeURIComponent(pageTitle)}`;
-
-  let searchResults = [];
-  let pageSections = [];
-  let pageFirstSectionText = '';
-  let pageFirstImage = null;
+  const token = req.user.tokens.find((token) => token.kind === 'pinterest');
+  const formData = new URLSearchParams();
+  formData.append('name', req.body.name);
+  formData.append('description', req.body.description);
 
   try {
-    if (query) {
-      searchResults = await searchWikipedia(query);
+    const response = await fetch('https://api.pinterest.com/v5/boards', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token.accessToken}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: formData.toString(),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to create Pinterest board');
     }
-    pageSections = await getPageSections(pageTitle);
-    pageFirstSectionText = await getPageExtract(pageTitle);
-    pageFirstImage = await getPageImage(pageTitle);
+    req.flash('success', { msg: 'The board has been successfully created.' });
+    res.redirect('/api/pinterest');
   } catch (err) {
-    console.error('Wikipedia Error:', err);
-    error = `Error fetching data for "${query}".`;
+    next(err);
   }
-  res.render('api/wikipedia', {
-    title: 'Wikipedia',
-    query,
-    wikiLink,
-    searchResults,
-    pageSections,
-    pageFirstSectionText,
-    pageFirstImage,
-    pageTitle,
-    error,
-  });
+};
+
+/**
+ * GET /api/google-drive
+ * Google Drive API example.
+ */
+exports.getGoogleDrive = async (req, res, next) => {
+  const token = req.user.tokens.find((token) => token.kind === 'google');
+  const auth = new googledrive.auth.OAuth2();
+  auth.setCredentials({ access_token: token.accessToken });
+  const drive = googledrive.drive({ version: 'v3', auth });
+
+  try {
+    const { data } = await drive.files.list({
+      pageSize: 10,
+      fields: 'nextPageToken, files(id, name)',
+    });
+    res.render('api/google-drive', {
+      title: 'Google Drive API',
+      files: data.files,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /api/google-sheets
+ * Google Sheets API example.
+ */
+exports.getGoogleSheets = async (req, res, next) => {
+  const token = req.user.tokens.find((token) => token.kind === 'google');
+  const auth = new googlesheets.auth.OAuth2();
+  auth.setCredentials({ access_token: token.accessToken });
+  const sheets = googlesheets.sheets({ version: 'v4', auth });
+
+  try {
+    const { data } = await sheets.spreadsheets.values.get({
+      spreadsheetId: '129m_76shYfX67D7v_Yh63708S_Y99_y76shYfX67D7v_Yh63708S_Y99',
+      range: 'A1:C5',
+    });
+    res.render('api/google-sheets', {
+      title: 'Google Sheets API',
+      values: data.values,
+    });
+  } catch (err) {
+    next(err);
+  }
 };
