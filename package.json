@@ -45,7 +45,7 @@
     "bowser": "^2.12.1",
     "chart.js": "^4.5.1",
     "cheerio": "^1.1.2",
-    "compression": "^1.8.1",
+    "compression": "^1.8.2",
     "connect-mongo": "^5.1.0",
     "dotenv": "^17.2.3",
     "errorhandler": "^1.5.1",
